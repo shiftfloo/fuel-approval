@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>אישור בקשת תדלוק</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar"><div><div class="title">אישור בקשת תדלוק</div><div class="sub" id="who"></div></div></header>
+<main class="wrap" id="main"><div class="card muted"><span class="spinner"></span> טוען…</div></main>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+const { api, h, fmtDateTime, fmtTime, qs } = App;
+const main = document.getElementById('main');
+const a = qs('a');
+const show = (...n) => main.replaceChildren(...n);
+
+async function load() {
+  if (!a) return show(h('div', { class: 'card' }, 'הקישור אינו תקין.'));
+  let d;
+  try {
+    d = await api('approval.view', { a });
+  } catch (e) {
+    return show(h('div', { class: 'card' }, h('h2', null, 'לא ניתן להציג'), h('p', null, e.message)));
+  }
+  document.getElementById('who').textContent = 'שלום ' + d.approver_name;
+  render(d);
+}
+
+function details(d) {
+  return h('div', { class: 'card' },
+    h('h2', null, `בקשה #${d.request_no}`),
+    h('dl', { class: 'kv' },
+      h('dt', null, 'רכב'), h('dd', null, h('span', { class: 'num' }, d.plate), d.vehicle_desc ? ' · ' + d.vehicle_desc : ''),
+      h('dt', null, 'חברה'), h('dd', null, d.company_name),
+      h('dt', null, 'נהג'), h('dd', null, d.driver_name, ' · ', h('a', { href: 'tel:' + d.driver_phone.replace(/\D/g, ''), class: 'num' }, d.driver_phone)),
+      h('dt', null, 'תחנה'), h('dd', null, d.station_name + (d.pump ? ` · משאבה ${d.pump}` : '')),
+      h('dt', null, 'כמות'), h('dd', null, d.amount_text, d.over_limit ? h('span', { class: 'pill rejected', style: 'margin-inline-start:6px' }, 'מעל המכסה') : null),
+      d.odometer != null ? [h('dt', null, 'קילומטראז׳'), h('dd', { class: 'num' }, d.odometer.toLocaleString('he-IL'))] : null,
+      d.notes ? [h('dt', null, 'הערות'), h('dd', null, d.notes)] : null,
+      h('dt', null, 'נשלחה'), h('dd', null, fmtDateTime(d.created_at))));
+}
+
+function render(d) {
+  if (d.status !== 'pending') {
+    const msg = {
+      approved: `הבקשה אושרה על ידי ${d.decided_by} בשעה ${fmtTime(d.decided_at)}. מספר אישור: ${d.approval_no}`,
+      rejected: `הבקשה נדחתה על ידי ${d.decided_by} בשעה ${fmtTime(d.decided_at)}.`,
+      expired: 'פג תוקף הבקשה. הנהג יכול לשלוח בקשה חדשה.',
+      cancelled: 'הנהג ביטל את הבקשה.',
+      denied: 'הבקשה נחסמה.',
+    }[d.status];
+    return show(h('div', { class: 'status ' + (d.status === 'approved' ? 'approved' : 'idle') }, h('div', { class: 'big' }, msg)), details(d));
+  }
+
+  const err = h('div', { class: 'error hidden', role: 'alert' });
+  const code = h('input', {
+    id: 'code', class: 'code-input', inputmode: 'numeric', autocomplete: 'one-time-code',
+    maxlength: '6', pattern: '[0-9]{6}', required: true, 'aria-describedby': 'codeHelp',
+  });
+  const amt = h('input', { id: 'amt', type: 'number', inputmode: 'decimal', min: '1', step: 'any', value: d.amount ?? '' });
+  const note = h('input', { id: 'note', maxlength: '200' });
+  const approveBtn = h('button', { class: 'ok', type: 'button' }, '✓ אישור');
+  const rejectBtn = h('button', { class: 'bad', type: 'button' }, '✕ דחייה');
+
+  async function decide(decision) {
+    err.classList.add('hidden');
+    const c = code.value.replace(/\D/g, '');
+    if (c.length !== 6) {
+      err.textContent = 'יש להזין את הקוד בן 6 הספרות שקיבלת ב-SMS';
+      err.classList.remove('hidden');
+      code.focus();
+      return;
+    }
+    if (decision === 'reject' && !confirm('לדחות את הבקשה?')) return;
+    approveBtn.disabled = rejectBtn.disabled = true;
+    try {
+      const r = await api('approval.decide', { a, code: c, decision, approvedAmount: amt.value, note: note.value });
+      show(
+        h('div', { class: 'status ' + (r.status === 'approved' ? 'approved' : 'bad') },
+          h('div', { class: 'big' }, r.status === 'approved' ? '✓ אישרת את התדלוק' : 'הבקשה נדחתה'),
+          r.approval_no ? [h('div', null, 'מספר אישור'), h('div', { class: 'approval-no' }, r.approval_no), h('div', null, r.approved_text)] : null,
+          h('div', { class: 'small' }, 'הנהג רואה את התשובה במסך שלו. הפעולה נרשמה ביומן.')),
+        details(d));
+    } catch (e) {
+      err.textContent = e.message + (e.attempts_left !== undefined ? ` (נותרו ${e.attempts_left} ניסיונות)` : '');
+      err.classList.remove('hidden');
+      approveBtn.disabled = rejectBtn.disabled = false;
+      if (['not_pending', 'expired'].includes(e.error)) setTimeout(load, 1500);
+    }
+  }
+  approveBtn.addEventListener('click', () => decide('approve'));
+  rejectBtn.addEventListener('click', () => decide('reject'));
+
+  show(
+    details(d),
+    h('div', { class: 'card' },
+      h('label', { for: 'code' }, 'קוד חד-פעמי'),
+      code,
+      h('div', { id: 'codeHelp', class: 'muted small' }, 'הקוד מופיע בהודעת ה-SMS שקיבלת. ההחלטה נשמרת ביומן עם שמך והשעה.'),
+      h('label', { for: 'amt' }, `כמות מאושרת (${d.amount_unit === 'ils' ? '₪' : 'ליטרים'})`, h('span', { class: 'opt' }, d.amount == null ? ' (ריק = מיכל מלא)' : ' (אפשר להקטין)')),
+      amt,
+      h('label', { for: 'note' }, 'הערה לנהג', h('span', { class: 'opt' }, ' (רשות)')),
+      note,
+      err,
+      h('div', { class: 'row', style: 'margin-top:18px' }, approveBtn, rejectBtn)));
+}
+
+load();
+</script>
+</body>
+</html>

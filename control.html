@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>בקרת תדלוק</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar no-print">
+  <div>
+    <div class="title" id="orgName">בקרת תדלוק</div>
+    <div class="sub" id="userName"></div>
+  </div>
+  <div class="spacer"></div>
+  <button type="button" id="logoutBtn" class="hidden">יציאה</button>
+</header>
+<main class="wrap wide" id="main"><div class="card muted"><span class="spinner"></span> טוען…</div></main>
+<dialog id="dlg"></dialog>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="control.js"></script>
+</body>
+</html>

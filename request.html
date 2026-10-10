@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>בקשת אישור תדלוק</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <div class="title" id="orgName">אישור תדלוק</div>
+    <div class="sub" id="stationName"></div>
+  </div>
+</header>
+<main class="wrap" id="main">
+  <div class="card muted"><span class="spinner"></span> טוען…</div>
+</main>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+const { api, h, fmtTime, fmtDateTime, toast, store, qs, FUEL } = App;
+const main = document.getElementById('main');
+const stationCode = (qs('s') || '').toUpperCase();
+const tokenKey = 'fuel.req.' + stationCode;
+let pollTimer = null;
+let tickTimer = null;
+
+function show(...nodes) {
+  main.replaceChildren(...nodes);
+}
+
+function fatal(msg) {
+  show(h('div', { class: 'card' }, h('h2', null, 'לא ניתן להמשיך'), h('p', { class: 'muted' }, msg)));
+}
+
+async function start() {
+  const t = qs('t') || store.get(tokenKey);
+  if (t) return showStatus(t);
+  if (!stationCode) return fatal('יש לסרוק את קוד ה-QR שבתחנה.');
+  let st;
+  try {
+    st = await api('station.info', { code: stationCode });
+  } catch (e) {
+    return fatal(e.message);
+  }
+  document.getElementById('orgName').textContent = st.org_name;
+  document.getElementById('stationName').textContent = st.name;
+  showForm(st);
+}
+
+function field(label, input, opt) {
+  const id = input.id;
+  return [h('label', { for: id }, label, opt ? h('span', { class: 'opt' }, ' (' + opt + ')') : null), input];
+}
+
+function showForm(st) {
+  const saved = JSON.parse(store.get('fuel.driver') || '{}');
+  const err = h('div', { class: 'error hidden', role: 'alert' });
+  const fuel = h('select', { id: 'fuel', required: true },
+    h('option', { value: '' }, 'בחר…'),
+    Object.entries(st.fuel_types).map(([k, v]) => h('option', { value: k, selected: saved.fuel === k }, v)));
+  const amount = h('input', { id: 'amount', type: 'number', inputmode: 'decimal', min: '1', step: 'any' });
+  const full = h('input', { type: 'checkbox', id: 'full' });
+  const unitSeg = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'יחידה' },
+    h('label', null, h('input', { type: 'radio', name: 'unit', value: 'liters', checked: true }), h('span', null, 'ליטרים')),
+    h('label', null, h('input', { type: 'radio', name: 'unit', value: 'ils' }), h('span', null, '₪ שקלים')));
+  full.addEventListener('change', () => {
+    amount.disabled = full.checked;
+    if (full.checked) amount.value = '';
+  });
+
+  const form = h('form', { class: 'card', novalidate: true },
+    h('h1', null, 'בקשת אישור תדלוק'),
+    h('p', { class: 'muted small' }, 'מלא את הפרטים. הבקשה תישלח למאשר מטעם החברה, והתשובה תופיע כאן במסך.'),
+    field('מספר רכב', h('input', { id: 'plate', inputmode: 'numeric', autocomplete: 'off', required: true, placeholder: '12-345-67', class: 'num', value: saved.plate || '' })),
+    field('שם הנהג', h('input', { id: 'driverName', autocomplete: 'name', required: true, value: saved.name || '' })),
+    field('טלפון נייד', h('input', { id: 'driverPhone', type: 'tel', inputmode: 'tel', autocomplete: 'tel', required: true, placeholder: '05X-XXXXXXX', class: 'num', value: saved.phone || '' })),
+    h('div', { class: 'row' },
+      h('div', null, field('סוג דלק', fuel)),
+      h('div', null, field('מספר משאבה', h('input', { id: 'pump', inputmode: 'numeric' }), 'רשות'))),
+    h('label', { for: 'amount' }, 'כמות'),
+    unitSeg,
+    h('div', { style: 'margin-top:8px' }, amount),
+    h('label', { class: 'check' }, full, 'מיכל מלא'),
+    field('קילומטראז׳', h('input', { id: 'odometer', type: 'number', inputmode: 'numeric', min: '0' }), 'רשות'),
+    field('הערות', h('textarea', { id: 'notes', maxlength: '200' }), 'רשות'),
+    err,
+    h('button', { class: 'primary block', type: 'submit' }, 'שליחת בקשה לאישור'));
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.classList.add('hidden');
+    const v = (id) => form.querySelector('#' + id).value.trim();
+    const payload = {
+      station: stationCode,
+      plate: v('plate'),
+      driverName: v('driverName'),
+      driverPhone: v('driverPhone'),
+      fuelType: v('fuel'),
+      pump: v('pump'),
+      amount: v('amount'),
+      amountUnit: form.querySelector('input[name=unit]:checked').value,
+      fullTank: full.checked,
+      odometer: v('odometer'),
+      notes: v('notes'),
+    };
+    const btn = form.querySelector('button[type=submit]');
+    btn.disabled = true;
+    btn.textContent = 'שולח…';
+    try {
+      const r = await api('request.create', payload);
+      store.set('fuel.driver', JSON.stringify({ plate: payload.plate, name: payload.driverName, phone: payload.driverPhone, fuel: payload.fuelType }));
+      store.set(tokenKey, r.token);
+      history.replaceState(null, '', `?s=${encodeURIComponent(stationCode)}&t=${encodeURIComponent(r.token)}`);
+      renderStatus(r);
+    } catch (ex) {
+      err.textContent = ex.message;
+      err.classList.remove('hidden');
+      btn.disabled = false;
+      btn.textContent = 'שליחת בקשה לאישור';
+    }
+  });
+  show(form);
+}
+
+async function showStatus(token) {
+  try {
+    renderStatus(await api('request.status', { token }));
+  } catch (e) {
+    store.set(tokenKey, null);
+    if (e.error === 'not_found' && stationCode) {
+      history.replaceState(null, '', `?s=${encodeURIComponent(stationCode)}`);
+      return start();
+    }
+    fatal(e.message);
+  }
+}
+
+function newRequest() {
+  store.set(tokenKey, null);
+  clearTimeout(pollTimer);
+  clearInterval(tickTimer);
+  history.replaceState(null, '', stationCode ? `?s=${encodeURIComponent(stationCode)}` : location.pathname);
+  start();
+}
+
+function detailsCard(r) {
+  return h('div', { class: 'card' },
+    h('dl', { class: 'kv' },
+      h('dt', null, 'בקשה'), h('dd', { class: 'num' }, '#' + r.request_no),
+      h('dt', null, 'רכב'), h('dd', { class: 'num' }, r.plate),
+      h('dt', null, 'נהג'), h('dd', null, r.driver_name),
+      h('dt', null, 'תחנה'), h('dd', null, r.station_name),
+      h('dt', null, 'כמות מבוקשת'), h('dd', null, r.amount_text),
+      h('dt', null, 'נשלחה'), h('dd', null, fmtDateTime(r.created_at))));
+}
+
+function renderStatus(r) {
+  document.getElementById('stationName').textContent = r.station_name || '';
+  clearTimeout(pollTimer);
+  clearInterval(tickTimer);
+  const nodes = [];
+
+  if (r.status === 'pending') {
+    const left = h('div', { class: 'small' });
+    const tick = () => {
+      const s = Math.max(0, Math.round((new Date(r.expires_at) - Date.now()) / 1000));
+      left.textContent = `הבקשה בתוקף עוד ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} דקות`;
+    };
+    tick();
+    tickTimer = setInterval(tick, 1000);
+    nodes.push(h('div', { class: 'status pending', role: 'status', 'aria-live': 'polite' },
+      h('span', { class: 'spinner', 'aria-hidden': 'true' }),
+      h('div', { class: 'big' }, 'ממתין לאישור'),
+      h('div', null, 'נשלחה הודעה למאשר. אל תסגור את המסך. התשובה תופיע כאן אוטומטית.'),
+      left));
+    nodes.push(detailsCard(r));
+    const remind = h('button', { type: 'button' }, 'שלח תזכורת למאשר');
+    remind.addEventListener('click', async () => {
+      remind.disabled = true;
+      try {
+        renderStatus(await api('request.remind', { token: r.token }));
+        toast('התזכורת נשלחה');
+      } catch (e) {
+        toast(e.message, true);
+        remind.disabled = false;
+      }
+    });
+    const cancel = h('button', { type: 'button', class: 'link' }, 'ביטול הבקשה');
+    cancel.addEventListener('click', async () => {
+      if (!confirm('לבטל את הבקשה?')) return;
+      try {
+        renderStatus(await api('request.cancel', { token: r.token }));
+      } catch (e) {
+        toast(e.message, true);
+      }
+    });
+    nodes.push(h('div', { class: 'row no-print' }, remind, cancel));
+    pollTimer = setTimeout(() => poll(r.token), 3000);
+  } else if (r.status === 'approved') {
+    nodes.push(h('div', { class: 'status approved', role: 'status' },
+      h('div', { class: 'big' }, '✓ התדלוק אושר'),
+      h('div', null, 'מספר אישור'),
+      h('div', { class: 'approval-no' }, r.approval_no)));
+    nodes.push(h('div', { class: 'card' },
+      h('h2', null, 'יש לרשום על השובר הידני:'),
+      h('dl', { class: 'kv' },
+        h('dt', null, 'מספר אישור'), h('dd', { class: 'num' }, r.approval_no),
+        h('dt', null, 'שם המאשר'), h('dd', null, r.approver_name),
+        h('dt', null, 'תאריך ושעת אישור'), h('dd', { class: 'num' }, fmtDateTime(r.decided_at)),
+        h('dt', null, 'כמות מאושרת'), h('dd', null, r.approved_text),
+        r.approver_note ? [h('dt', null, 'הערת המאשר'), h('dd', null, r.approver_note)] : null)));
+    nodes.push(detailsCard(r));
+  } else {
+    const titles = { rejected: 'הבקשה נדחתה', denied: 'לא ניתן לאשר תדלוק', expired: 'פג תוקף הבקשה', cancelled: 'הבקשה בוטלה' };
+    const body = r.status === 'rejected'
+      ? `נדחתה על ידי ${r.approver_name} בשעה ${fmtTime(r.decided_at)}${r.approver_note ? ' - ' + r.approver_note : ''}`
+      : r.status === 'denied' ? r.deny_reason + '. יש לפנות לחברה.'
+      : r.status === 'expired' ? 'המאשר לא השיב בזמן. אפשר לשלוח בקשה חדשה.' : '';
+    nodes.push(h('div', { class: 'status ' + (r.status === 'cancelled' || r.status === 'expired' ? 'idle' : 'bad'), role: 'status' },
+      h('div', { class: 'big' }, titles[r.status] || r.status),
+      body ? h('div', null, body) : null));
+    nodes.push(detailsCard(r));
+  }
+  if (r.status !== 'pending') {
+    nodes.push(h('button', { class: 'primary block no-print', type: 'button', onclick: newRequest }, 'בקשה חדשה'));
+  }
+  show(...nodes);
+}
+
+async function poll(token) {
+  try {
+    const r = await api('request.status', { token });
+    if (r.status !== 'pending') {
+      if (navigator.vibrate) navigator.vibrate(200);
+      renderStatus(r);
+      return;
+    }
+  } catch {}
+  pollTimer = setTimeout(() => poll(token), document.hidden ? 8000 : 3000);
+}
+
+start();
+</script>
+</body>
+</html>
