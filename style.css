@@ -198,6 +198,8 @@ dl.kv dd { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
 .tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--line); margin-bottom: 16px; scrollbar-width: thin; }
 .tabs button { border: none; border-bottom: 3px solid transparent; border-radius: 0; background: none; white-space: nowrap; color: var(--muted); }
 .tabs button.active { color: var(--ink); border-bottom-color: var(--brand); }
+.subtabs { margin-top: -8px; }
+.subtabs button { font-size: .92rem; min-height: 38px; padding: 6px 14px; }
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-bottom: 12px; }
 .toolbar > * { flex: 0 1 auto; }
 .toolbar input, .toolbar select { min-height: 40px; padding: 7px 10px; width: auto; }

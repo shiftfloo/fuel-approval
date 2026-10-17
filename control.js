@@ -99,21 +99,29 @@
 
   // ---------- shell ----------
 
+  // Work order: set up companies -> approvers -> vehicles, then daily monitoring and voucher control.
+  // Stations and users are set up rarely, so they live under Settings.
   const TABS = [
-    { id: 'monitor', label: 'מעקב בקשות', roles: ['admin', 'controller', 'station'], render: renderMonitor },
-    { id: 'reconcile', label: 'בקרת שוברים', roles: ['admin', 'controller'], render: renderReconcile },
-    { id: 'vehicles', label: 'רכבים', roles: ['admin'], render: () => renderTable('vehicles') },
-    { id: 'approvers', label: 'מאשרים', roles: ['admin'], render: () => renderTable('approvers') },
     { id: 'companies', label: 'חברות', roles: ['admin'], render: () => renderTable('companies') },
-    { id: 'stations', label: 'תחנות ו-QR', roles: ['admin'], render: () => renderTable('stations') },
-    { id: 'users', label: 'משתמשים', roles: ['admin'], render: () => renderTable('users') },
-    { id: 'audit', label: 'יומן ביקורת', roles: ['admin', 'controller'], render: renderAudit },
+    { id: 'approvers', label: 'מאשרים', roles: ['admin'], render: () => renderTable('approvers') },
+    { id: 'vehicles', label: 'רכבים', roles: ['admin'], render: () => renderTable('vehicles') },
+    { id: 'monitor', label: 'מעקב בקשות', roles: ['admin', 'controller', 'station'], render: renderMonitor },
     { id: 'outbox', label: 'הודעות SMS', roles: ['admin'], render: renderOutbox },
+    { id: 'reconcile', label: 'בקרת שוברים', roles: ['admin', 'controller'], render: renderReconcile },
+    { id: 'audit', label: 'יומן ביקורת', roles: ['admin', 'controller'], render: renderAudit },
     { id: 'settings', label: 'הגדרות', roles: ['admin'], render: renderSettings },
   ];
+  const SETTINGS_TABS = [
+    { id: 'general', label: 'כללי', render: renderGeneral },
+    { id: 'stations', label: 'תחנות ו-QR', render: () => renderTable('stations') },
+    { id: 'users', label: 'משתמשים', render: () => renderTable('users') },
+  ];
+  const OLD_HASH = { stations: 'settings/stations', users: 'settings/users' };
 
   let body;
+  let pane; // where the current tab draws (body, or the settings sub-pane)
   let current;
+  let settingsSub = 'general';
 
   async function showApp() {
     document.getElementById('logoutBtn').classList.remove('hidden');
@@ -132,19 +140,22 @@
       bar.append(h('button', { type: 'button', role: 'tab', 'data-tab': t.id, onclick: () => go(t.id) }, t.label));
     }
     main.replaceChildren(banner || '', bar, body);
-    const want = location.hash.slice(1);
-    go(tabs.some((t) => t.id === want) ? want : tabs[0].id);
+    const [want, sub] = (OLD_HASH[location.hash.slice(1)] || location.hash.slice(1)).split('/');
+    if (sub && SETTINGS_TABS.some((t) => t.id === sub)) settingsSub = sub;
+    // daily work starts at the monitor; the tab order follows the setup order
+    go(tabs.some((t) => t.id === want) ? want : tabs.some((t) => t.id === 'monitor') ? 'monitor' : tabs[0].id);
   }
 
   function go(id) {
     clearInterval(refreshTimer);
     current = id;
-    history.replaceState(null, '', '#' + id);
+    pane = body;
+    history.replaceState(null, '', '#' + id + (id === 'settings' ? '/' + settingsSub : ''));
     main.querySelectorAll('.tabs button').forEach((b) => {
       b.classList.toggle('active', b.dataset.tab === id);
       b.setAttribute('aria-selected', b.dataset.tab === id);
     });
-    body.replaceChildren(h('div', { class: 'muted' }, 'טוען…'));
+    pane.replaceChildren(h('div', { class: 'muted' }, 'טוען…'));
     TABS.find((t) => t.id === id).render();
   }
 
@@ -213,7 +224,7 @@
     let qTimer;
     q.addEventListener('input', () => { clearTimeout(qTimer); qTimer = setTimeout(load, 300); });
 
-    body.replaceChildren(
+    pane.replaceChildren(
       h('div', { class: 'toolbar no-print' },
         lbl('מתאריך', from), lbl('עד תאריך', to), lbl('סטטוס', statusSel),
         stationSel ? lbl('תחנה', stationSel) : null, lbl('חיפוש', q),
@@ -398,7 +409,7 @@
       }
     });
     const listWrap = h('div', { class: 'table-wrap' }, h('p', { class: 'muted', style: 'padding:14px' }, 'טוען…'));
-    body.replaceChildren(form, h('h2', null, 'אישורים שטרם נבדק להם שובר (60 יום אחרונים)'), listWrap);
+    pane.replaceChildren(form, h('h2', null, 'אישורים שטרם נבדק להם שובר (60 יום אחרונים)'), listWrap);
     input.focus();
     try {
       const rows = await call('monitor.list', { status: 'unreconciled', from: dayStart(addDays(todayStr(), -60)) });
@@ -498,7 +509,7 @@
       rows = await call('admin.list', { table });
       lookups = await call('admin.lookups');
     } catch (e) {
-      body.replaceChildren(h('div', { class: 'error' }, e.message));
+      pane.replaceChildren(h('div', { class: 'error' }, e.message));
       return;
     }
     const q = h('input', { type: 'search', placeholder: 'חיפוש…', 'aria-label': 'חיפוש' });
@@ -522,7 +533,7 @@
         : h('p', { class: 'muted', style: 'padding:14px' }, shown.value === 'hidden' ? 'אין רשומות לא פעילות.' : 'אין רשומות.'));
     };
     q.addEventListener('input', draw);
-    body.replaceChildren(
+    pane.replaceChildren(
       h('div', { class: 'toolbar' },
         h('button', { class: 'primary', type: 'button', onclick: () => editRow(table, { active: true, all_vehicles: true }) }, `+ ${S.title} ${S.fem ? 'חדשה' : 'חדש'}`),
         shown, S.search ? q : null, S.extra ? S.extra() : null),
@@ -731,7 +742,7 @@
     };
     [from, to, ev].forEach((x) => x.addEventListener('change', load));
     const lbl = (t, el) => h('div', null, h('label', { for: el.id }, t), el);
-    body.replaceChildren(h('div', { class: 'toolbar' }, lbl('מתאריך', from), lbl('עד', to), lbl('סוג', ev)),
+    pane.replaceChildren(h('div', { class: 'toolbar' }, lbl('מתאריך', from), lbl('עד', to), lbl('סוג', ev)),
       h('p', { class: 'muted small' }, 'היומן אינו ניתן לעריכה או מחיקה. לחיצה על שורה של בקשה פותחת אותה.'), wrap);
     load();
   }
@@ -746,10 +757,10 @@
     try {
       rows = await call('outbox.list');
     } catch (e) {
-      body.replaceChildren(h('div', { class: 'error' }, e.message));
+      pane.replaceChildren(h('div', { class: 'error' }, e.message));
       return;
     }
-    body.replaceChildren(
+    pane.replaceChildren(
       h('p', { class: 'muted small' }, App.smsProvider === 'demo'
         ? 'מצב הדגמה: ההודעות לא נשלחו באמת. כדי לנסות, העתק את הקוד ופתח את הקישור מההודעה.'
         : 'בהודעות שנשלחו באמת הקוד מוסתר (******), כך שגם מנהל המערכת לא יכול לאשר במקום המאשר.'),
@@ -768,12 +779,31 @@
     return String(text).split(/(https?:\/\/\S+)/).map((p) => (/^https?:\/\//.test(p) ? h('a', { href: p, target: '_blank', rel: 'noopener', dir: 'ltr' }, 'פתיחת הקישור') : p));
   }
 
-  async function renderSettings() {
+  function renderSettings() {
+    const nav = h('nav', { class: 'tabs subtabs no-print', role: 'tablist' });
+    const sub = h('div');
+    const open = (id) => {
+      settingsSub = id;
+      history.replaceState(null, '', '#settings/' + id);
+      nav.querySelectorAll('button').forEach((b) => {
+        b.classList.toggle('active', b.dataset.sub === id);
+        b.setAttribute('aria-selected', b.dataset.sub === id);
+      });
+      pane = sub;
+      sub.replaceChildren(h('div', { class: 'muted' }, 'טוען…'));
+      SETTINGS_TABS.find((t) => t.id === id).render();
+    };
+    for (const t of SETTINGS_TABS) nav.append(h('button', { type: 'button', role: 'tab', 'data-sub': t.id, onclick: () => open(t.id) }, t.label));
+    body.replaceChildren(nav, sub);
+    open(settingsSub);
+  }
+
+  async function renderGeneral() {
     let s;
     try {
       s = await call('settings.get');
     } catch (e) {
-      body.replaceChildren(h('div', { class: 'error' }, e.message));
+      pane.replaceChildren(h('div', { class: 'error' }, e.message));
       return;
     }
     const F = [
@@ -800,7 +830,7 @@
       old: h('input', { type: 'password', id: 'pwOld', autocomplete: 'current-password', dir: 'ltr' }),
       new: h('input', { type: 'password', id: 'pwNew', autocomplete: 'new-password', dir: 'ltr' }),
     };
-    body.replaceChildren(
+    pane.replaceChildren(
       h('div', { class: 'card', style: 'max-width:560px' }, h('h2', null, 'הגדרות'),
         h('p', { class: 'muted small' }, `ספק SMS: ${s.sms_provider === 'demo' ? 'הדגמה (לא נשלח באמת)' : s.sms_provider}. הספק מוגדר בשרת (משתני סביבה).`),
         nodes, err,
