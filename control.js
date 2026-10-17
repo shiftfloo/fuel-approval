@@ -99,29 +99,38 @@
 
   // ---------- shell ----------
 
-  // Work order: set up companies -> approvers -> vehicles, then daily monitoring and voucher control.
+  // Work order: set up customers (with their approvers and vehicles), then daily monitoring and voucher control.
   // Stations and users are set up rarely, so they live under Settings.
+  const GROUPS = {
+    customers: [
+      { id: 'companies', label: 'לקוחות', render: () => renderTable('companies') },
+      { id: 'approvers', label: 'מאשרים', render: () => renderTable('approvers') },
+      { id: 'vehicles', label: 'רכבים', render: () => renderTable('vehicles') },
+    ],
+    settings: [
+      { id: 'general', label: 'כללי', render: () => renderGeneral() },
+      { id: 'stations', label: 'תחנות ו-QR', render: () => renderTable('stations') },
+      { id: 'users', label: 'משתמשים', render: () => renderTable('users') },
+    ],
+  };
   const TABS = [
-    { id: 'companies', label: 'חברות', roles: ['admin'], render: () => renderTable('companies') },
-    { id: 'approvers', label: 'מאשרים', roles: ['admin'], render: () => renderTable('approvers') },
-    { id: 'vehicles', label: 'רכבים', roles: ['admin'], render: () => renderTable('vehicles') },
+    { id: 'customers', label: 'לקוחות', roles: ['admin'], render: () => renderGroup('customers') },
     { id: 'monitor', label: 'מעקב בקשות', roles: ['admin', 'controller', 'station'], render: renderMonitor },
     { id: 'outbox', label: 'הודעות SMS', roles: ['admin'], render: renderOutbox },
     { id: 'reconcile', label: 'בקרת שוברים', roles: ['admin', 'controller'], render: renderReconcile },
     { id: 'audit', label: 'יומן ביקורת', roles: ['admin', 'controller'], render: renderAudit },
-    { id: 'settings', label: 'הגדרות', roles: ['admin'], render: renderSettings },
+    { id: 'settings', label: 'הגדרות', roles: ['admin'], render: () => renderGroup('settings') },
   ];
-  const SETTINGS_TABS = [
-    { id: 'general', label: 'כללי', render: renderGeneral },
-    { id: 'stations', label: 'תחנות ו-QR', render: () => renderTable('stations') },
-    { id: 'users', label: 'משתמשים', render: () => renderTable('users') },
-  ];
-  const OLD_HASH = { stations: 'settings/stations', users: 'settings/users' };
+  // links saved before the menu was regrouped
+  const OLD_HASH = {
+    companies: 'customers/companies', approvers: 'customers/approvers', vehicles: 'customers/vehicles',
+    stations: 'settings/stations', users: 'settings/users',
+  };
+  const groupSub = { customers: 'companies', settings: 'general' };
 
   let body;
   let pane; // where the current tab draws (body, or the settings sub-pane)
   let current;
-  let settingsSub = 'general';
 
   async function showApp() {
     document.getElementById('logoutBtn').classList.remove('hidden');
@@ -141,7 +150,7 @@
     }
     main.replaceChildren(banner || '', bar, body);
     const [want, sub] = (OLD_HASH[location.hash.slice(1)] || location.hash.slice(1)).split('/');
-    if (sub && SETTINGS_TABS.some((t) => t.id === sub)) settingsSub = sub;
+    if (sub && GROUPS[want]?.some((t) => t.id === sub)) groupSub[want] = sub;
     // daily work starts at the monitor; the tab order follows the setup order
     go(tabs.some((t) => t.id === want) ? want : tabs.some((t) => t.id === 'monitor') ? 'monitor' : tabs[0].id);
   }
@@ -150,7 +159,7 @@
     clearInterval(refreshTimer);
     current = id;
     pane = body;
-    history.replaceState(null, '', '#' + id + (id === 'settings' ? '/' + settingsSub : ''));
+    history.replaceState(null, '', '#' + id + (GROUPS[id] ? '/' + groupSub[id] : ''));
     main.querySelectorAll('.tabs button').forEach((b) => {
       b.classList.toggle('active', b.dataset.tab === id);
       b.setAttribute('aria-selected', b.dataset.tab === id);
@@ -240,7 +249,7 @@
   function requestsTable(rows) {
     if (!rows.length) return h('p', { class: 'muted', style: 'padding:14px' }, 'אין בקשות בטווח שנבחר.');
     return h('table', null,
-      h('thead', null, h('tr', null, ['#', 'שעה', 'תחנה', 'רכב', 'חברה', 'נהג', 'כמות', 'סטטוס', 'מספר אישור', 'מאשר', 'שובר'].map((t) => h('th', null, t)))),
+      h('thead', null, h('tr', null, ['#', 'שעה', 'תחנה', 'רכב', 'לקוח', 'נהג', 'כמות', 'סטטוס', 'מספר אישור', 'מאשר', 'שובר'].map((t) => h('th', null, t)))),
       h('tbody', null, rows.map((r) => h('tr', { class: 'click', tabindex: '0', onclick: () => openRequest(r.id), onkeydown: (e) => e.key === 'Enter' && openRequest(r.id) },
         h('td', { class: 'num' }, r.request_no),
         h('td', { class: 'num' }, fmtDate(r.created_at) === fmtDate(new Date().toISOString()) ? fmtTime(r.created_at) : fmtDateTime(r.created_at)),
@@ -259,7 +268,7 @@
   function exportCsv(rows) {
     const cols = [
       ['request_no', 'מס׳ בקשה'], ['created_at', 'נוצרה', fmtDateTime], ['station_name', 'תחנה'], ['plate_fmt', 'רכב'],
-      ['vehicle_desc', 'תיאור רכב'], ['company_name', 'חברה'], ['driver_name', 'נהג'], ['driver_phone', 'טלפון נהג'],
+      ['vehicle_desc', 'תיאור רכב'], ['company_name', 'לקוח'], ['driver_name', 'נהג'], ['driver_phone', 'טלפון נהג'],
       ['fuel_type', 'דלק', (v) => FUEL[v] || v], ['amount_text', 'כמות מבוקשת'], ['status', 'סטטוס', (v) => STATUS[v]],
       ['deny_text', 'סיבת חסימה'], ['approval_no', 'מספר אישור'], ['approver_name', 'מאשר'], ['approver_phone', 'טלפון מאשר'],
       ['decided_at', 'זמן החלטה', fmtDateTime], ['approved_text', 'כמות מאושרת'], ['approver_note', 'הערת מאשר'],
@@ -288,7 +297,7 @@
     const parts = [
       h('div', { style: 'margin:10px 0' }, pill(r.status), ' ', r.status === 'approved' ? pill(r.reconcile_status || 'todo') : ''),
       kv([
-        ['רכב', h('span', { class: 'num' }, r.plate_fmt)], ['תיאור', r.vehicle_desc], ['חברה', r.company_name],
+        ['רכב', h('span', { class: 'num' }, r.plate_fmt)], ['תיאור', r.vehicle_desc], ['לקוח', r.company_name],
         ['נהג', `${r.driver_name} · ${fmtPhone(r.driver_phone)}`], ['תחנה', r.station_name + (r.pump ? ` · משאבה ${r.pump}` : '')],
         ['כמות מבוקשת', r.amount_text + (r.over_limit ? ' (מעל המכסה)' : '')], ['קילומטראז׳', r.odometer], ['הערות', r.notes],
         ['נוצרה', fmtDateTime(r.created_at)], ['סיבת חסימה', r.deny_text],
@@ -371,7 +380,7 @@
       h('dl', { class: 'kv' },
         h('dt', null, 'מספר אישור'), h('dd', { class: 'num' }, r.approval_no),
         h('dt', null, 'רכב'), h('dd', { class: 'num' }, r.plate_fmt),
-        h('dt', null, 'חברה'), h('dd', null, r.company_name),
+        h('dt', null, 'לקוח'), h('dd', null, r.company_name),
         h('dt', null, 'מאשר'), h('dd', null, r.approver_name),
         h('dt', null, 'זמן אישור'), h('dd', { class: 'num' }, fmtDateTime(r.decided_at)),
         h('dt', null, 'כמות מאושרת'), h('dd', null, r.approved_text),
@@ -427,23 +436,23 @@
   const companyActive = (id) => lookups.companies.find((c) => c.id === id)?.active !== false;
   // A vehicle/approver of an inactive company is blocked too, so it counts as hidden.
   const isActive = (r) => r.active !== false && (!('company_id' in r) || companyActive(r.company_id));
-  const activeText = (v, r) => (r.active === false ? 'לא' : companyActive(r.company_id) ? 'כן' : 'לא (החברה לא פעילה)');
+  const activeText = (v, r) => (r.active === false ? 'לא' : companyActive(r.company_id) ? 'כן' : 'לא (הלקוח לא פעיל)');
   const showFilter = {}; // per table: 'active' | 'hidden' | 'all'
 
   const SCHEMAS = {
     vehicles: {
       title: 'רכב',
-      cols: [['plate', 'מספר רכב', fmtPlate], ['company_id', 'חברה', companyName], ['description', 'תיאור'],
+      cols: [['plate', 'מספר רכב', fmtPlate], ['company_id', 'לקוח', companyName], ['description', 'תיאור'],
         ['fuel_type', 'דלק', (v) => FUEL[v] || ''], ['max_liters', 'מכסה (ל׳)'],
-        ['approver_ids', 'מאשרים', (v, r) => (v?.length ? v.map((id) => lookups.approvers.find((a) => a.id === id)?.name).join(', ') : 'כל מאשרי החברה')],
+        ['approver_ids', 'מאשרים', (v, r) => (v?.length ? v.map((id) => lookups.approvers.find((a) => a.id === id)?.name).join(', ') : 'כל מאשרי הלקוח')],
         ['active', 'פעיל', activeText]],
       fields: [
         { k: 'plate', l: 'מספר רכב', req: true, attrs: { inputmode: 'numeric' } },
-        { k: 'company_id', l: 'חברה', type: 'company', req: true },
+        { k: 'company_id', l: 'לקוח', type: 'company', req: true },
         { k: 'description', l: 'תיאור (דגם / סוג)' },
         { k: 'fuel_type', l: 'סוג דלק', type: 'select', options: { '': '-', ...FUEL } },
         { k: 'max_liters', l: 'מכסת ליטרים לתדלוק', type: 'number', hint: 'בקשה מעל המכסה מסומנת למאשר' },
-        { k: 'approver_ids', l: 'מאשרים לרכב זה', type: 'approvers', hint: 'לא סומן אף אחד = כל מאשרי החברה שמוגדרים "מאשר לכל הרכבים"' },
+        { k: 'approver_ids', l: 'מאשרים לרכב זה', type: 'approvers', hint: 'לא סומן אף אחד = כל מאשרי הלקוח שמוגדרים "מאשר לכל הרכבים"' },
         { k: 'notes', l: 'הערות', type: 'textarea' },
         { k: 'active', l: 'פעיל (מורשה לתדלוק)', type: 'bool', hint: 'רכבים לא נמחקים מהמערכת. כדי להסיר רכב מבטלים את הסימון: הרכב מוסתר מהרשימה ונחסם לתדלוק, וההיסטוריה שלו נשמרת.' },
       ],
@@ -452,29 +461,29 @@
     },
     approvers: {
       title: 'מאשר',
-      cols: [['name', 'שם'], ['phone', 'טלפון', fmtPhone], ['company_id', 'חברה', companyName], ['role_title', 'תפקיד'],
+      cols: [['name', 'שם'], ['phone', 'טלפון', fmtPhone], ['company_id', 'לקוח', companyName], ['role_title', 'תפקיד'],
         ['all_vehicles', 'לכל הרכבים', bool], ['active', 'פעיל', activeText]],
       fields: [
         { k: 'name', l: 'שם', req: true },
         { k: 'phone', l: 'טלפון נייד (יקבל SMS)', req: true, attrs: { type: 'tel', inputmode: 'tel', dir: 'ltr' } },
-        { k: 'company_id', l: 'חברה', type: 'company', req: true },
+        { k: 'company_id', l: 'לקוח', type: 'company', req: true },
         { k: 'role_title', l: 'תפקיד' },
-        { k: 'all_vehicles', l: 'מאשר לכל רכבי החברה (שאין להם מאשר ייעודי)', type: 'bool' },
+        { k: 'all_vehicles', l: 'מאשר לכל רכבי הלקוח (שאין להם מאשר ייעודי)', type: 'bool' },
         { k: 'active', l: 'פעיל', type: 'bool' },
       ],
       search: (r) => [r.name, r.phone, companyName(r.company_id)].join(' '),
     },
     companies: {
-      title: 'חברה', fem: true,
+      title: 'לקוח',
       cols: [['name', 'שם'], ['tax_id', 'ח.פ.'], ['contact_name', 'איש קשר'], ['contact_phone', 'טלפון'],
-        ['station_ids', 'תחנות מורשות', (v, r) => (r.all_stations ? 'כל התחנות' : (v || []).map(stationName).join(', ') || '-')],
-        ['active', 'פעילה', bool]],
+        ['station_ids', 'תחנות מורשות', (v, r) => (r.all_stations !== false ? 'כל התחנות' : (v || []).map(stationName).join(', ') || '-')],
+        ['active', 'פעיל', bool]],
       fields: [
-        { k: 'name', l: 'שם החברה', req: true }, { k: 'tax_id', l: 'ח.פ.' }, { k: 'contact_name', l: 'איש קשר' },
+        { k: 'name', l: 'שם הלקוח', req: true }, { k: 'tax_id', l: 'ח.פ.' }, { k: 'contact_name', l: 'איש קשר' },
         { k: 'contact_phone', l: 'טלפון' },
         { k: 'station_ids', l: 'תחנות שבהן מותר לתדלק', type: 'stations', req: true, hint: 'חובה: "כל התחנות" או לפחות תחנה אחת. בתחנה שלא סומנה הנהג יקבל "תחנה לא מורשית" ורשימת התחנות המורשות.' },
         { k: 'notes', l: 'הערות', type: 'textarea' },
-        { k: 'active', l: 'פעילה', type: 'bool', hint: 'ביטול הסימון מסתיר את החברה, את הרכבים ואת המאשרים שלה, וחוסם תדלוק לכל רכביה.' },
+        { k: 'active', l: 'פעיל', type: 'bool', hint: 'ביטול הסימון מסתיר את הלקוח, את הרכבים ואת המאשרים שלו, וחוסם תדלוק לכל רכביו.' },
       ],
       search: (r) => [r.name, r.tax_id].join(' '),
     },
@@ -565,7 +574,7 @@
         nodes.push(h('label', { class: 'check' }, el, f.l));
       } else {
         if (f.type === 'select' || f.type === 'company' || f.type === 'station') {
-          const opts = f.type === 'company' ? { '': 'בחר חברה…', ...Object.fromEntries(lookups.companies.filter((c) => c.active || c.id === row[f.k]).map((c) => [c.id, c.name + (c.active ? '' : ' (לא פעילה)')])) }
+          const opts = f.type === 'company' ? { '': 'בחר לקוח…', ...Object.fromEntries(lookups.companies.filter((c) => c.active || c.id === row[f.k]).map((c) => [c.id, c.name + (c.active ? '' : ' (לא פעיל)')])) }
             : f.type === 'station' ? { '': '-', ...Object.fromEntries(lookups.stations.map((s) => [s.id, s.name])) } : f.options;
           el = h('select', { id }, Object.entries(opts).map(([k, v]) => h('option', { value: k }, v)));
           el.value = row[f.k] ?? '';
@@ -591,7 +600,7 @@
       const list = lookups.approvers.filter((a) => a.company_id === cid && (a.active || (row.approver_ids || []).includes(a.id)));
       approverBox.replaceChildren(...(list.length ? list.map((a) => h('label', { class: 'check' },
         h('input', { type: 'checkbox', value: a.id, checked: (row.approver_ids || []).includes(a.id) }), a.name + (a.active ? '' : ' (לא פעיל)')))
-        : [h('div', { class: 'muted small' }, cid ? 'לחברה זו אין מאשרים עדיין' : 'בחר חברה')]));
+        : [h('div', { class: 'muted small' }, cid ? 'ללקוח זה אין מאשרים עדיין' : 'בחר לקוח')]));
     };
     if (table === 'vehicles') {
       drawApprovers();
@@ -629,7 +638,7 @@
 
   const IMPORT_COLS = {
     plate: ['מספר רכב', 'רכב', 'מס רכב', 'מספר רישוי', 'plate'],
-    company: ['חברה', 'לקוח', 'שם חברה', 'company'],
+    company: ['לקוח', 'שם לקוח', 'חברה', 'שם חברה', 'company'],
     description: ['תיאור', 'דגם', 'סוג רכב', 'description'],
     fuel_type: ['סוג דלק', 'דלק', 'fuel'],
     max_liters: ['מכסה', 'מכסת ליטרים', 'ליטרים', 'max_liters'],
@@ -655,11 +664,11 @@
         }
         return out;
       }).filter((r) => r.plate || r.company);
-      if (!rows.length) return toast('לא נמצאו עמודות "מספר רכב" ו"חברה" בשורה הראשונה', true);
+      if (!rows.length) return toast('לא נמצאו עמודות "מספר רכב" ו"לקוח" בשורה הראשונה', true);
       if (!confirm(`לייבא ${rows.length} שורות? רכבים קיימים (לפי מספר) יעודכנו.`)) return;
       try {
         const r = await call('admin.importVehicles', { rows });
-        const msg = `נוספו ${r.vehicles_new} רכבים, עודכנו ${r.vehicles_updated}, חברות חדשות ${r.companies}, מאשרים חדשים ${r.approvers}`;
+        const msg = `נוספו ${r.vehicles_new} רכבים, עודכנו ${r.vehicles_updated}, לקוחות חדשים ${r.companies}, מאשרים חדשים ${r.approvers}`;
         openDialog('תוצאות ייבוא', [h('p', null, msg),
           r.errors.length ? [h('h3', null, `${r.errors.length} שורות לא יובאו`), h('ul', null, r.errors.slice(0, 200).map((e) => h('li', null, `שורה ${e.line}: ${e.error}`)))] : null]);
         renderTable('vehicles');
@@ -668,7 +677,7 @@
       }
     });
     const template = () => {
-      const csv = '﻿מספר רכב,חברה,תיאור,סוג דלק,מכסה,שם מאשר,טלפון מאשר\r\n12-345-67,הובלות לדוגמה בע"מ,טנדר,סולר,80,ישראל ישראלי,0501234567\r\n';
+      const csv = '﻿מספר רכב,לקוח,תיאור,סוג דלק,מכסה,שם מאשר,טלפון מאשר\r\n12-345-67,הובלות לדוגמה בע"מ,טנדר,סולר,80,ישראל ישראלי,0501234567\r\n';
       const a = h('a', { href: URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })), download: 'תבנית_ייבוא_רכבים.csv' });
       document.body.append(a);
       a.click();
@@ -691,7 +700,7 @@
     const box = h('div', { style: 'display:flex;justify-content:center;margin:16px 0' });
     const sheet = h('div', { id: 'qrSheet', style: 'text-align:center' },
       h('h1', { style: 'font-size:2rem' }, 'אין דלקן בתחנה?'),
-      h('p', { style: 'font-size:1.3rem;margin:0' }, 'לקוחות עם אישור חברה - סרקו לבקשת אישור תדלוק'),
+      h('p', { style: 'font-size:1.3rem;margin:0' }, 'נהגים של לקוחות מורשים - סרקו לבקשת אישור תדלוק'),
       box,
       h('p', { style: 'font-weight:700;font-size:1.2rem' }, st.name),
       h('p', { class: 'small num', style: 'word-break:break-all' }, url));
@@ -779,23 +788,24 @@
     return String(text).split(/(https?:\/\/\S+)/).map((p) => (/^https?:\/\//.test(p) ? h('a', { href: p, target: '_blank', rel: 'noopener', dir: 'ltr' }, 'פתיחת הקישור') : p));
   }
 
-  function renderSettings() {
+  // a top tab with its own row of sub-tabs
+  function renderGroup(group) {
     const nav = h('nav', { class: 'tabs subtabs no-print', role: 'tablist' });
     const sub = h('div');
     const open = (id) => {
-      settingsSub = id;
-      history.replaceState(null, '', '#settings/' + id);
+      groupSub[group] = id;
+      history.replaceState(null, '', `#${group}/${id}`);
       nav.querySelectorAll('button').forEach((b) => {
         b.classList.toggle('active', b.dataset.sub === id);
         b.setAttribute('aria-selected', b.dataset.sub === id);
       });
       pane = sub;
       sub.replaceChildren(h('div', { class: 'muted' }, 'טוען…'));
-      SETTINGS_TABS.find((t) => t.id === id).render();
+      GROUPS[group].find((t) => t.id === id).render();
     };
-    for (const t of SETTINGS_TABS) nav.append(h('button', { type: 'button', role: 'tab', 'data-sub': t.id, onclick: () => open(t.id) }, t.label));
+    for (const t of GROUPS[group]) nav.append(h('button', { type: 'button', role: 'tab', 'data-sub': t.id, onclick: () => open(t.id) }, t.label));
     body.replaceChildren(nav, sub);
-    open(settingsSub);
+    open(groupSub[group]);
   }
 
   async function renderGeneral() {
