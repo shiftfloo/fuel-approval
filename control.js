@@ -413,6 +413,11 @@
   const bool = (v) => (v ? 'כן' : 'לא');
   const companyName = (id) => lookups.companies.find((c) => c.id === id)?.name || '';
   const stationName = (id) => lookups.stations.find((s) => s.id === id)?.name || '';
+  const companyActive = (id) => lookups.companies.find((c) => c.id === id)?.active !== false;
+  // A vehicle/approver of an inactive company is blocked too, so it counts as hidden.
+  const isActive = (r) => r.active !== false && (!('company_id' in r) || companyActive(r.company_id));
+  const activeText = (v, r) => (r.active === false ? 'לא' : companyActive(r.company_id) ? 'כן' : 'לא (החברה לא פעילה)');
+  const showFilter = {}; // per table: 'active' | 'hidden' | 'all'
 
   const SCHEMAS = {
     vehicles: {
@@ -420,7 +425,7 @@
       cols: [['plate', 'מספר רכב', fmtPlate], ['company_id', 'חברה', companyName], ['description', 'תיאור'],
         ['fuel_type', 'דלק', (v) => FUEL[v] || ''], ['max_liters', 'מכסה (ל׳)'],
         ['approver_ids', 'מאשרים', (v, r) => (v?.length ? v.map((id) => lookups.approvers.find((a) => a.id === id)?.name).join(', ') : 'כל מאשרי החברה')],
-        ['active', 'פעיל', bool]],
+        ['active', 'פעיל', activeText]],
       fields: [
         { k: 'plate', l: 'מספר רכב', req: true, attrs: { inputmode: 'numeric' } },
         { k: 'company_id', l: 'חברה', type: 'company', req: true },
@@ -429,7 +434,7 @@
         { k: 'max_liters', l: 'מכסת ליטרים לתדלוק', type: 'number', hint: 'בקשה מעל המכסה מסומנת למאשר' },
         { k: 'approver_ids', l: 'מאשרים לרכב זה', type: 'approvers', hint: 'לא סומן אף אחד = כל מאשרי החברה שמוגדרים "מאשר לכל הרכבים"' },
         { k: 'notes', l: 'הערות', type: 'textarea' },
-        { k: 'active', l: 'פעיל (מורשה לתדלוק)', type: 'bool' },
+        { k: 'active', l: 'פעיל (מורשה לתדלוק)', type: 'bool', hint: 'רכבים לא נמחקים מהמערכת. כדי להסיר רכב מבטלים את הסימון: הרכב מוסתר מהרשימה ונחסם לתדלוק, וההיסטוריה שלו נשמרת.' },
       ],
       search: (r) => [r.plate, r.description, companyName(r.company_id)].join(' '),
       extra: () => importButton(),
@@ -437,7 +442,7 @@
     approvers: {
       title: 'מאשר',
       cols: [['name', 'שם'], ['phone', 'טלפון', fmtPhone], ['company_id', 'חברה', companyName], ['role_title', 'תפקיד'],
-        ['all_vehicles', 'לכל הרכבים', bool], ['active', 'פעיל', bool]],
+        ['all_vehicles', 'לכל הרכבים', bool], ['active', 'פעיל', activeText]],
       fields: [
         { k: 'name', l: 'שם', req: true },
         { k: 'phone', l: 'טלפון נייד (יקבל SMS)', req: true, attrs: { type: 'tel', inputmode: 'tel', dir: 'ltr' } },
@@ -454,7 +459,7 @@
       fields: [
         { k: 'name', l: 'שם החברה', req: true }, { k: 'tax_id', l: 'ח.פ.' }, { k: 'contact_name', l: 'איש קשר' },
         { k: 'contact_phone', l: 'טלפון' }, { k: 'notes', l: 'הערות', type: 'textarea' },
-        { k: 'active', l: 'פעילה (כבוי = כל רכבי החברה חסומים)', type: 'bool' },
+        { k: 'active', l: 'פעילה', type: 'bool', hint: 'ביטול הסימון מסתיר את החברה, את הרכבים ואת המאשרים שלה, וחוסם תדלוק לכל רכביה.' },
       ],
       search: (r) => [r.name, r.tax_id].join(' '),
     },
@@ -494,22 +499,29 @@
     }
     const q = h('input', { type: 'search', placeholder: 'חיפוש…', 'aria-label': 'חיפוש' });
     const wrap = h('div', { class: 'table-wrap' });
+    const nActive = rows.filter(isActive).length;
+    const shown = h('select', { 'aria-label': 'הצגה' },
+      h('option', { value: 'active' }, `פעילים (${nActive})`),
+      h('option', { value: 'hidden' }, `לא פעילים / מוסתרים (${rows.length - nActive})`),
+      h('option', { value: 'all' }, `הכל (${rows.length})`));
+    shown.value = showFilter[table] || 'active';
+    shown.addEventListener('change', () => { showFilter[table] = shown.value; draw(); });
     const draw = () => {
       const term = q.value.trim().replace(/-/g, '');
-      const list = term && S.search ? rows.filter((r) => S.search(r).replace(/-/g, '').includes(term)) : rows;
+      const byState = rows.filter((r) => shown.value === 'all' || (shown.value === 'active') === isActive(r));
+      const list = term && S.search ? byState.filter((r) => S.search(r).replace(/-/g, '').includes(term)) : byState;
       wrap.replaceChildren(list.length ? h('table', null,
         h('thead', null, h('tr', null, S.cols.map((c) => h('th', null, c[1])), S.rowAction ? h('th') : null)),
-        h('tbody', null, list.map((r) => h('tr', { class: 'click' + (r.active === false ? ' inactive' : ''), tabindex: '0', onclick: () => editRow(table, r), onkeydown: (e) => e.key === 'Enter' && editRow(table, r) },
+        h('tbody', null, list.map((r) => h('tr', { class: 'click' + (isActive(r) ? '' : ' inactive'), tabindex: '0', onclick: () => editRow(table, r), onkeydown: (e) => e.key === 'Enter' && editRow(table, r) },
           S.cols.map(([k, , f]) => h('td', { class: ['plate', 'phone', 'code', 'max_liters'].includes(k) ? 'num' : null }, f ? f(r[k], r) : r[k] ?? '')),
           S.rowAction ? h('td', null, S.rowAction(r)) : null))))
-        : h('p', { class: 'muted', style: 'padding:14px' }, 'אין רשומות.'));
+        : h('p', { class: 'muted', style: 'padding:14px' }, shown.value === 'hidden' ? 'אין רשומות לא פעילות.' : 'אין רשומות.'));
     };
     q.addEventListener('input', draw);
     body.replaceChildren(
       h('div', { class: 'toolbar' },
         h('button', { class: 'primary', type: 'button', onclick: () => editRow(table, { active: true, all_vehicles: true }) }, `+ ${S.title} ${S.fem ? 'חדשה' : 'חדש'}`),
-        S.search ? q : null, S.extra ? S.extra() : null,
-        h('span', { class: 'muted small' }, `${rows.length} רשומות`)),
+        shown, S.search ? q : null, S.extra ? S.extra() : null),
       wrap);
     draw();
   }
@@ -528,7 +540,7 @@
         nodes.push(h('label', { class: 'check' }, el, f.l));
       } else {
         if (f.type === 'select' || f.type === 'company' || f.type === 'station') {
-          const opts = f.type === 'company' ? { '': 'בחר חברה…', ...Object.fromEntries(lookups.companies.map((c) => [c.id, c.name + (c.active ? '' : ' (לא פעילה)')])) }
+          const opts = f.type === 'company' ? { '': 'בחר חברה…', ...Object.fromEntries(lookups.companies.filter((c) => c.active || c.id === row[f.k]).map((c) => [c.id, c.name + (c.active ? '' : ' (לא פעילה)')])) }
             : f.type === 'station' ? { '': '-', ...Object.fromEntries(lookups.stations.map((s) => [s.id, s.name])) } : f.options;
           el = h('select', { id }, Object.entries(opts).map(([k, v]) => h('option', { value: k }, v)));
           el.value = row[f.k] ?? '';
@@ -549,7 +561,7 @@
     // vehicle: approver checkboxes follow the chosen company
     const drawApprovers = () => {
       const cid = inputs.company_id?.value;
-      const list = lookups.approvers.filter((a) => a.company_id === cid);
+      const list = lookups.approvers.filter((a) => a.company_id === cid && (a.active || (row.approver_ids || []).includes(a.id)));
       approverBox.replaceChildren(...(list.length ? list.map((a) => h('label', { class: 'check' },
         h('input', { type: 'checkbox', value: a.id, checked: (row.approver_ids || []).includes(a.id) }), a.name + (a.active ? '' : ' (לא פעיל)')))
         : [h('div', { class: 'muted small' }, cid ? 'לחברה זו אין מאשרים עדיין' : 'בחר חברה')]));
