@@ -455,10 +455,14 @@
     },
     companies: {
       title: 'חברה', fem: true,
-      cols: [['name', 'שם'], ['tax_id', 'ח.פ.'], ['contact_name', 'איש קשר'], ['contact_phone', 'טלפון'], ['active', 'פעילה', bool]],
+      cols: [['name', 'שם'], ['tax_id', 'ח.פ.'], ['contact_name', 'איש קשר'], ['contact_phone', 'טלפון'],
+        ['station_ids', 'תחנות מורשות', (v, r) => (r.all_stations ? 'כל התחנות' : (v || []).map(stationName).join(', ') || '-')],
+        ['active', 'פעילה', bool]],
       fields: [
         { k: 'name', l: 'שם החברה', req: true }, { k: 'tax_id', l: 'ח.פ.' }, { k: 'contact_name', l: 'איש קשר' },
-        { k: 'contact_phone', l: 'טלפון' }, { k: 'notes', l: 'הערות', type: 'textarea' },
+        { k: 'contact_phone', l: 'טלפון' },
+        { k: 'station_ids', l: 'תחנות שבהן מותר לתדלק', type: 'stations', req: true, hint: 'חובה: "כל התחנות" או לפחות תחנה אחת. בתחנה שלא סומנה הנהג יקבל "תחנה לא מורשית" ורשימת התחנות המורשות.' },
+        { k: 'notes', l: 'הערות', type: 'textarea' },
         { k: 'active', l: 'פעילה', type: 'bool', hint: 'ביטול הסימון מסתיר את החברה, את הרכבים ואת המאשרים שלה, וחוסם תדלוק לכל רכביה.' },
       ],
       search: (r) => [r.name, r.tax_id].join(' '),
@@ -531,6 +535,16 @@
     const err = h('div', { class: 'error hidden', role: 'alert' });
     const inputs = {};
     const approverBox = h('div');
+    // company: "all stations" switch + per-station checkboxes (hidden while "all" is on)
+    const allStations = h('input', { type: 'checkbox', checked: row.id ? row.all_stations !== false : false });
+    const stationList = h('div', { style: 'margin-inline-start:28px' },
+      lookups.stations.filter((st) => st.active || (row.station_ids || []).includes(st.id)).map((st) => h('label', { class: 'check' },
+        h('input', { type: 'checkbox', value: st.id, checked: (row.station_ids || []).includes(st.id) }),
+        st.name + (st.active ? '' : ' (לא פעילה)'))));
+    const stationBox = h('div', { role: 'group' }, h('label', { class: 'check' }, allStations, h('b', null, 'כל התחנות')), stationList);
+    const syncStations = () => stationList.classList.toggle('hidden', allStations.checked);
+    allStations.addEventListener('change', syncStations);
+    syncStations();
     const nodes = [];
     for (const f of S.fields) {
       const id = 'f_' + f.k;
@@ -546,6 +560,8 @@
           el.value = row[f.k] ?? '';
         } else if (f.type === 'approvers') {
           el = approverBox;
+        } else if (f.type === 'stations') {
+          el = stationBox;
         } else if (f.type === 'textarea') {
           el = h('textarea', { id });
           el.value = row[f.k] ?? '';
@@ -578,6 +594,10 @@
         const el = inputs[f.k];
         if (f.type === 'bool') out[f.k] = el.checked;
         else if (f.type === 'approvers') out[f.k] = [...approverBox.querySelectorAll('input:checked')].map((i) => i.value);
+        else if (f.type === 'stations') {
+          out.all_stations = allStations.checked;
+          out[f.k] = allStations.checked ? [] : [...stationList.querySelectorAll('input:checked')].map((i) => i.value);
+        }
         else out[f.k] = el.value;
       }
       try {

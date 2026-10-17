@@ -220,11 +220,19 @@ function renderStatus(r) {
     const titles = { rejected: 'הבקשה נדחתה', denied: 'לא ניתן לאשר תדלוק', expired: 'פג תוקף הבקשה', cancelled: 'הבקשה בוטלה' };
     const body = r.status === 'rejected'
       ? `נדחתה על ידי ${r.approver_name} בשעה ${fmtTime(r.decided_at)}${r.approver_note ? ' - ' + r.approver_note : ''}`
-      : r.status === 'denied' ? r.deny_reason + '. יש לפנות לחברה.'
+      : r.status === 'denied' ? r.deny_reason + (r.allowed_stations ? '.' : '. יש לפנות לחברה.')
       : r.status === 'expired' ? 'המאשר לא השיב בזמן. אפשר לשלוח בקשה חדשה.' : '';
     nodes.push(h('div', { class: 'status ' + (r.status === 'cancelled' || r.status === 'expired' ? 'idle' : 'bad'), role: 'status' },
       h('div', { class: 'big' }, titles[r.status] || r.status),
       body ? h('div', null, body) : null));
+    if (r.allowed_stations) {
+      nodes.push(h('div', { class: 'card' },
+        h('h2', null, 'תחנות שבהן מותר לרכב זה לתדלק:'),
+        r.allowed_stations.length
+          ? h('ul', { style: 'margin:0;padding-inline-start:20px' }, r.allowed_stations.map((st) =>
+            h('li', { style: 'margin:6px 0' }, h('b', null, st.name), st.address ? h('span', { class: 'muted' }, ' · ' + st.address) : null)))
+          : h('p', { class: 'muted' }, 'אין כרגע תחנות פעילות מורשות. יש לפנות לחברה.')));
+    }
     nodes.push(detailsCard(r));
   }
   if (r.status !== 'pending') {
