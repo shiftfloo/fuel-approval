@@ -102,11 +102,6 @@
   // Work order: set up customers (with their approvers and vehicles), then daily monitoring and voucher control.
   // Stations and users are set up rarely, so they live under Settings.
   const GROUPS = {
-    customers: [
-      { id: 'companies', label: 'לקוחות', render: () => renderTable('companies') },
-      { id: 'approvers', label: 'מאשרים', render: () => renderTable('approvers') },
-      { id: 'vehicles', label: 'רכבים', render: () => renderTable('vehicles') },
-    ],
     settings: [
       { id: 'general', label: 'כללי', render: () => renderGeneral() },
       { id: 'stations', label: 'תחנות ו-QR', render: () => renderTable('stations') },
@@ -114,7 +109,7 @@
     ],
   };
   const TABS = [
-    { id: 'customers', label: 'לקוחות', roles: ['admin'], render: () => renderGroup('customers') },
+    { id: 'customers', label: 'לקוחות', roles: ['admin'], render: renderCustomers },
     { id: 'monitor', label: 'מעקב בקשות', roles: ['admin', 'controller', 'station'], render: renderMonitor },
     { id: 'outbox', label: 'הודעות SMS', roles: ['admin'], render: renderOutbox },
     { id: 'reconcile', label: 'בקרת שוברים', roles: ['admin', 'controller'], render: renderReconcile },
@@ -123,10 +118,10 @@
   ];
   // links saved before the menu was regrouped
   const OLD_HASH = {
-    companies: 'customers/companies', approvers: 'customers/approvers', vehicles: 'customers/vehicles',
+    companies: 'customers', approvers: 'customers', vehicles: 'customers',
     stations: 'settings/stations', users: 'settings/users',
   };
-  const groupSub = { customers: 'companies', settings: 'general' };
+  const groupSub = { settings: 'general' };
 
   let body;
   let pane; // where the current tab draws (body, or the settings sub-pane)
@@ -511,6 +506,112 @@
     },
   };
 
+  // ---------- customers: each customer with its approvers and vehicles nested under it ----------
+
+  const openCustomers = new Set();
+  let customersFilter = 'active';
+
+  async function renderCustomers() {
+    let companies, approvers, vehicles;
+    try {
+      [companies, approvers, vehicles, lookups] = await Promise.all([
+        call('admin.list', { table: 'companies' }), call('admin.list', { table: 'approvers' }),
+        call('admin.list', { table: 'vehicles' }), call('admin.lookups'),
+      ]);
+    } catch (e) {
+      pane.replaceChildren(h('div', { class: 'error' }, e.message));
+      return;
+    }
+    const q = h('input', { type: 'search', placeholder: 'חיפוש לקוח, מאשר או מספר רכב…', 'aria-label': 'חיפוש', style: 'min-width:240px' });
+    const list = h('div', { class: 'customers' });
+    const hiddenCount = companies.filter((c) => c.active === false).length;
+    const shown = h('select', { 'aria-label': 'הצגה' },
+      h('option', { value: 'active' }, `פעילים (${companies.length - hiddenCount})`),
+      h('option', { value: 'hidden' }, 'לא פעילים / מוסתרים'),
+      h('option', { value: 'all' }, `הכל (${companies.length})`));
+    shown.value = customersFilter;
+
+    // which approvers/vehicles a customer row shows under the current filter
+    const keep = (r, c) => {
+      const act = r.active !== false && c.active !== false;
+      return shown.value === 'all' || (shown.value === 'active') === act;
+    };
+
+    const draw = () => {
+      const term = q.value.trim().replace(/-/g, '');
+      const hit = (...xs) => xs.some((x) => x && String(x).replace(/-/g, '').includes(term));
+      const blocks = [];
+      for (const c of companies) {
+        const aps = approvers.filter((a) => a.company_id === c.id);
+        const vs = vehicles.filter((v) => v.company_id === c.id);
+        const apsShown = aps.filter((a) => keep(a, c));
+        const vsShown = vs.filter((v) => keep(v, c));
+        if (shown.value === 'active' && c.active === false) continue;
+        if (shown.value === 'hidden' && c.active !== false && !apsShown.length && !vsShown.length) continue;
+        let apsList = apsShown;
+        let vsList = vsShown;
+        let forceOpen = false;
+        if (term) {
+          const selfHit = hit(c.name, c.tax_id, c.contact_name);
+          const aHit = apsShown.filter((a) => hit(a.name, a.phone));
+          const vHit = vsShown.filter((v) => hit(v.plate, v.description));
+          if (!selfHit && !aHit.length && !vHit.length) continue;
+          if (!selfHit) { apsList = aHit; vsList = vHit; forceOpen = true; }
+        }
+        blocks.push(customerBlock(c, apsList, vsList, aps.length, vs.length, forceOpen));
+      }
+      list.replaceChildren(...(blocks.length ? blocks : [h('p', { class: 'muted', style: 'padding:14px' }, term ? 'לא נמצאו תוצאות.' : 'אין לקוחות.')]));
+    };
+
+    function customerBlock(c, aps, vs, apTotal, vTotal, forceOpen) {
+      const isOpen = forceOpen || openCustomers.has(c.id);
+      const stations = c.all_stations !== false ? 'כל התחנות' : (c.station_ids || []).map(stationName).join(', ') || '-';
+      const head = h('button', {
+        type: 'button', class: 'cust-head', 'aria-expanded': String(isOpen),
+        onclick: () => { openCustomers.has(c.id) ? openCustomers.delete(c.id) : openCustomers.add(c.id); draw(); },
+      },
+      h('span', { class: 'chev', 'aria-hidden': 'true' }, isOpen ? '▾' : '◂'),
+      h('span', { class: 'cust-name' }, c.name),
+      c.active === false ? h('span', { class: 'pill expired' }, 'לא פעיל') : null,
+      h('span', { class: 'muted small' }, `${apTotal === 1 ? 'מאשר אחד' : apTotal + ' מאשרים'} · ${vTotal === 1 ? 'רכב אחד' : vTotal + ' רכבים'} · תחנות: ${stations}`));
+      const edit = h('button', { type: 'button', class: 'link', onclick: () => editRow('companies', c) }, 'עריכת לקוח');
+      const wrap = h('div', { class: 'card cust' + (c.active === false ? ' inactive' : '') }, h('div', { class: 'cust-top' }, head, edit));
+      if (!isOpen) return wrap;
+
+      const fresh = { company_id: c.id, active: true, all_vehicles: true };
+      const sub = (title, btnText, onAdd, table) => h('div', { class: 'cust-sub' },
+        h('div', { class: 'cust-sub-head' }, h('h3', null, title), h('button', { type: 'button', onclick: onAdd }, btnText)), table);
+      const rowsOf = (items, cols, tbl) => (items.length
+        ? h('div', { class: 'table-wrap' }, h('table', null,
+          h('thead', null, h('tr', null, cols.map((x) => h('th', null, x[1])))),
+          h('tbody', null, items.map((r) => h('tr', {
+            class: 'click' + (r.active === false || c.active === false ? ' inactive' : ''), tabindex: '0',
+            onclick: () => editRow(tbl, r), onkeydown: (e) => e.key === 'Enter' && editRow(tbl, r),
+          }, cols.map(([k, , f, cls]) => h('td', { class: cls || null }, f ? f(r[k], r) : r[k] ?? '')))))))
+        : h('p', { class: 'muted small', style: 'margin:4px 0 0' }, forceOpen ? 'אין התאמות לחיפוש.' : 'אין עדיין.'));
+      const yes = (v) => (v === false ? 'לא' : 'כן');
+      wrap.append(
+        sub('מאשרים', '+ מאשר', () => editRow('approvers', fresh), rowsOf(aps, [
+          ['name', 'שם'], ['phone', 'טלפון', fmtPhone, 'num'], ['role_title', 'תפקיד'],
+          ['all_vehicles', 'לכל הרכבים', bool], ['active', 'פעיל', yes]], 'approvers')),
+        sub('רכבים', '+ רכב', () => editRow('vehicles', fresh), rowsOf(vs, [
+          ['plate', 'מספר רכב', fmtPlate, 'num'], ['description', 'תיאור'], ['fuel_type', 'דלק', (v) => FUEL[v] || ''],
+          ['max_liters', 'מכסה (ל׳)', null, 'num'],
+          ['approver_ids', 'מאשרים', (v) => (v?.length ? v.map((id) => lookups.approvers.find((a) => a.id === id)?.name).join(', ') : 'כל מאשרי הלקוח')],
+          ['active', 'פעיל', yes]], 'vehicles')));
+      return wrap;
+    }
+
+    q.addEventListener('input', draw);
+    shown.addEventListener('change', () => { customersFilter = shown.value; draw(); });
+    pane.replaceChildren(
+      h('div', { class: 'toolbar' },
+        h('button', { class: 'primary', type: 'button', onclick: () => editRow('companies', { active: true }) }, '+ לקוח חדש'),
+        shown, q, importButton()),
+      list);
+    draw();
+  }
+
   async function renderTable(table) {
     const S = SCHEMAS[table];
     let rows;
@@ -624,7 +725,7 @@
         await call('admin.save', { table, row: out });
         dlg.close();
         toast('נשמר');
-        renderTable(table);
+        current === 'customers' ? renderCustomers() : renderTable(table);
       } catch (e) {
         err.textContent = e.message;
         err.classList.remove('hidden');
@@ -671,7 +772,7 @@
         const msg = `נוספו ${r.vehicles_new} רכבים, עודכנו ${r.vehicles_updated}, לקוחות חדשים ${r.companies}, מאשרים חדשים ${r.approvers}`;
         openDialog('תוצאות ייבוא', [h('p', null, msg),
           r.errors.length ? [h('h3', null, `${r.errors.length} שורות לא יובאו`), h('ul', null, r.errors.slice(0, 200).map((e) => h('li', null, `שורה ${e.line}: ${e.error}`)))] : null]);
-        renderTable('vehicles');
+        renderCustomers();
       } catch (e) {
         toast(e.message, true);
       }
